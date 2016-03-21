@@ -346,8 +346,7 @@ minExists x conjs =
 pushquant :: (FreeVars a, Ord a) => Variable -> Formula a -> Formula a
 pushquant x p =
   if x ∉ fv p then p else
-  let disjs = purednf (nnf p) in
-  disjoin $ map (minExists x) disjs
+  disjoin . map (minExists x) $ purednf (nnf p)
 
 -- Minimize the scope of quantifiers as much as possible
 miniscope :: (FreeVars a, Ord a) => Formula a -> Formula a
@@ -362,12 +361,10 @@ miniscope = \case
 -- Apply a quantifier elimination procedure only to the existential relevant to x
 qelim :: FreeVars a => (Formula a -> Formula a) -> Variable -> Formula a -> Formula a
 qelim qfn x p =
-  let cjs = conjuncts p in
-  case partition ((x ∈) . fv) cjs of
+  case partition ((x ∈) . fv) (conjuncts p) of
     ([], _) -> p
     (ycjs, ncjs) ->
-      let q = qfn (Exists x $ conjoin ycjs) in
-      foldr (:/\) q ncjs
+      foldr (:/\) (qfn (Exists x $ conjoin ycjs)) ncjs
 
 -- Generic parameterized quantifier elimination
 liftQelim :: (FreeVars a, FreeVars b, Ord a, Ord b)
