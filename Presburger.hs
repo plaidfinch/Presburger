@@ -403,6 +403,34 @@ cnnf lfn = simplify . cnnf' . simplify
       Not (p :\/ q) -> cnnf' (Not p) :/\ cnnf' (Not q)
       fm -> lfn fm
 
+-- EXAMPLES
+
+-- should be TRUE
+ex1 :: Formula Atom
+ex1 = integerQelim $
+  Forall "x" $ Forall "y" $
+  Not (Atom (2 :* "x" :+ 1 :== 2 :* "y"))
+
+-- should be TRUE
+ex2 :: Formula Atom
+ex2 = integerQelim $
+  Forall "x" $ Exists "y" $
+  Atom (2 :* "y" :<= "x") :/\ Atom ("x" :< 2 :* ("y" :+ 1))
+
+-- should be FALSE
+ex3 :: Formula Atom
+ex3 = integerQelim $
+  Exists "x" $ Exists "y" $
+    Atom (4 :* "x" :- 6 :* "y" :== 1)
+
+-- should be TRUE
+ex4 :: Formula Atom
+ex4 = integerQelim $
+  Forall "x" $
+    Not (Atom (2 :| "x")) :/\ (Atom (3 :| ("x" :- 1)))
+    <=>
+    (Atom (12 :| ("x" :- 1))) :\/ (Atom (12 :| ("x" :- 7)))
+
 -- Computing free variables
 
 class FreeVars a where
