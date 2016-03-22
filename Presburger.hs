@@ -151,35 +151,36 @@ formlcm x = \case
   p :\/ q -> formlcm x p `lcm` formlcm x q
   _ -> 1
 
--- Adjust the coefficients of x so that they lie between -1 and 1, given the lcm for x
-adjustcoeff :: Variable -> Integer -> Formula CAtom -> Formula CAtom
-adjustcoeff x l = \case
-  Atom t@(getCanonTerm -> CT (Map.lookup x -> Just c) (constCTerm -> z)) ->
-    let m = l `div` c
-        n = case t of
-          GreaterZero {} -> abs m
-          _              -> m
-        xtm = (m `div` n) .* varCTerm x
-    in
-      Atom $
-        (case t of
-           Divides d   _ -> Divides (abs m * d)
-           GreaterZero _ -> GreaterZero
-           EqualZero   _ -> EqualZero)
-        (xtm .+ n .* z)
-  Not p   -> Not $ adjustcoeff x l p
-  p :/\ q -> adjustcoeff x l p :/\ adjustcoeff x l q
-  p :\/ q -> adjustcoeff x l p :\/ adjustcoeff x l q
-  fm -> fm
 
 -- Adjust the coefficients of x so that they lie between -1 and 1
 unitycoeff :: Variable -> Formula CAtom -> Formula CAtom
 unitycoeff x fm =
-  let l = formlcm x fm
-      fm' = adjustcoeff x l fm
-  in
-    if l == 1 then fm'
-    else Atom (Divides l (varCTerm x)) :/\ fm'
+  Atom (Divides lcmX (varCTerm x)) :/\ adjustcoeff fm
+  where
+    -- LCM for x in fm
+    lcmX = formlcm x fm
+
+    -- Adjust the coefficients of x so that they lie between -1 and 1
+    adjustcoeff :: Formula CAtom -> Formula CAtom
+    adjustcoeff = \case
+      Atom t@(getCanonTerm -> CT (Map.lookup x -> Just c) (constCTerm -> z)) ->
+        let m = lcmX `div` c
+            n = case t of
+              GreaterZero {} -> abs m
+              _              -> m
+            xtm = (m `div` n) .* varCTerm x -- m `div` n will be either -1 or 1, since n = m or abs m
+        in
+          Atom $
+            (case t of
+              Divides d   _ -> Divides (abs m * d)
+              GreaterZero _ -> GreaterZero
+              EqualZero   _ -> EqualZero)
+            (xtm .+ n .* z)
+      Not p   -> Not $ adjustcoeff p
+      p :/\ q -> adjustcoeff p :/\ adjustcoeff q
+      p :\/ q -> adjustcoeff p :\/ adjustcoeff q
+      fm -> fm
+
 
 -- The "minus infinity" transformation
 minusinf :: Variable -> Formula CAtom -> Formula CAtom
@@ -202,17 +203,19 @@ divlcm x = \case
   _ -> 1
 
 -- Compute the "boundary set" for a variable x in a formula
-bset :: Variable -> Formula CAtom -> Set CTerm
-bset x = \case
-    Not (Atom (EqualZero (CT (Map.lookup x -> Just 1) (constCTerm -> a)))) -> Set.singleton $ (-1) .* a
-    Atom      (EqualZero (CT (Map.lookup x -> Just 1) (constCTerm -> a)))  -> Set.singleton $ (-1) .* (a .+ one)
-    Atom    (GreaterZero (CT (Map.lookup x -> Just 1) (constCTerm -> a)))  -> Set.singleton $ (-1) .* a
-    Not p -> bset x p
-    p :/\ q -> bset x p ∪ bset x q
-    p :\/ q -> bset x p ∪ bset x q
-    _ -> Set.empty
+bset :: Variable -> Formula CAtom -> [CTerm]
+bset x = Set.toList . bset'
+  where
+    bset' = \case
+      Not (Atom (EqualZero (CT (Map.lookup x -> Just 1) (constCTerm -> a)))) -> Set.singleton $ (-1) .* a
+      Atom      (EqualZero (CT (Map.lookup x -> Just 1) (constCTerm -> a)))  -> Set.singleton $ (-1) .* (a .+ one)
+      Atom    (GreaterZero (CT (Map.lookup x -> Just 1) (constCTerm -> a)))  -> Set.singleton $ (-1) .* a
+      Not p -> bset' p
+      p :/\ q -> bset' p ∪ bset' q
+      p :\/ q -> bset' p ∪ bset' q
+      _ -> Set.empty
 
--- Replace a variable with a term in a formula
+-- Replace a variable with a term in a formula (we do not substitute at all under binders)
 linrep :: Variable -> CTerm -> Formula CAtom -> Formula CAtom
 linrep x t = \case
   Atom s@(getCanonTerm -> CT (Map.lookup x -> Just c) (constCTerm -> a)) ->
@@ -229,11 +232,12 @@ cooper (Exists x (unitycoeff x -> p)) =
   where
     p_inf = simplify $ minusinf x p
     bs = bset x p
-    js = [1 .. divlcm x p]
-    p_element j b = linrep x (b .+ constCTerm j) p
+    js = constCTerm <$> [1 .. divlcm x p]
+    p_element j b = linrep x (b .+ j) p
     stage j =
-      disjoin $ linrep x (constCTerm j) p_inf :
-                map (p_element j) (Set.toList bs)
+      disjoin $
+        linrep x j p_inf :
+          map (p_element j) bs
 cooper _ = error "cooper: not an existential formula"
 
 -- Simplifying formulae
@@ -241,33 +245,24 @@ cooper _ = error "cooper: not an existential formula"
 -- Recursively simplify the boolean bits of a formula
 psimplify :: Formula a -> Formula a
 psimplify = \case
-  Not p      -> psimplify1 (Not (psimplify p))
-  p :/\  q   -> psimplify1 (psimplify p :/\ psimplify q)
-  p :\/  q   -> psimplify1 (psimplify p :\/ psimplify q)
-  fm         -> fm
-
--- Simplify the boolean bits of a formula one level down
-psimplify1 :: Formula a -> Formula a
-psimplify1 = \case
-  Not FALSE   -> TRUE
-  Not TRUE    -> FALSE
-  Not (Not p) -> p
-  _ :/\ FALSE -> FALSE
-  FALSE :/\ _ -> FALSE
-  p :/\ TRUE  -> p
-  TRUE :/\ p  -> p
-  p :\/ FALSE -> p
-  FALSE :\/ p -> p
-  _ :\/ TRUE  -> TRUE
-  TRUE :\/ _  -> TRUE
-  fm -> fm
-
--- Simplify a formula one level down
-simplify1 :: FreeVars a => Formula a -> Formula a
-simplify1 = \case
-  fm@(Forall x p) -> if x ∈ fv p then fm else p
-  fm@(Exists x p) -> if x ∈ fv p then fm else p
-  fm -> psimplify1 fm
+  Not p   -> psimplify1 (Not (psimplify p))
+  p :/\ q -> psimplify1 (psimplify p :/\ psimplify q)
+  p :\/ q -> psimplify1 (psimplify p :\/ psimplify q)
+  fm      -> fm
+  where
+    psimplify1 = \case
+      Not FALSE   -> TRUE
+      Not TRUE    -> FALSE
+      Not (Not p) -> p
+      _ :/\ FALSE -> FALSE
+      FALSE :/\ _ -> FALSE
+      p :/\ TRUE  -> p
+      TRUE :/\ p  -> p
+      p :\/ FALSE -> p
+      FALSE :\/ p -> p
+      _ :\/ TRUE  -> TRUE
+      TRUE :\/ _  -> TRUE
+      fm -> fm
 
 -- Simplify a formula recursively
 simplify :: FreeVars a => Formula a -> Formula a
@@ -280,6 +275,11 @@ simplify = \case
   Atom a     -> Atom a
   TRUE       -> TRUE
   FALSE      -> FALSE
+  where
+    simplify1 = \case
+      fm@(Forall x p) -> if x ∈ fv p then fm else p
+      fm@(Exists x p) -> if x ∈ fv p then fm else p
+      fm -> psimplify fm
 
 -- Conversion to negation-normal form
 nnf :: Formula a -> Formula a
